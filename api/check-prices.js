@@ -39,17 +39,30 @@ async function fetchPriceAliExpress(url) {
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     );
 
-    await page.goto(url, { waitUntil: "domcontentloaded" });
+    await page.goto(url, { waitUntil: "networkidle2" });
 
-    // espera o preço aparecer
-    await page.waitForSelector("[class*='price']", { timeout: 15000 });
+    // 🔥 espera elementos principais carregarem
+    await page.waitForSelector("body", { timeout: 15000 });
+
+    // pequeno delay pra renderizar preço correto
+    await new Promise((r) => setTimeout(r, 3000));
 
     const priceText = await page.evaluate(() => {
-      const el =
-        document.querySelector("[class*='price-default--current']") ||
-        document.querySelector("[class*='price--currentPriceText']");
+      // 🔥 ordem de prioridade (mais confiável primeiro)
+      const selectors = [
+        "[class*='price--currentPriceText']", // preço principal atual
+        "[class*='price-default--current']", // fallback comum
+        "[class*='uniform-banner-box-price']", // promoções
+      ];
 
-      return el ? el.innerText : null;
+      for (const selector of selectors) {
+        const el = document.querySelector(selector);
+        if (el && el.innerText) {
+          return el.innerText;
+        }
+      }
+
+      return null;
     });
 
     await browser.close();
@@ -59,12 +72,23 @@ async function fetchPriceAliExpress(url) {
       return null;
     }
 
+    // 🔥 limpeza mais robusta
     const price = parseFloat(
-      priceText.replace(/[^\d,\.]/g, "").replace(",", ".")
+      priceText
+        .replace(/\s/g, "")
+        .replace(/[^\d,\.]/g, "")
+        .replace(",", ".")
     );
 
-    return isNaN(price) ? null : price;
+    if (isNaN(price)) return null;
 
+    // 🔥 filtro anti-preço fake (opcional, mas MUITO útil)
+    if (price < 10) {
+      console.warn("Preço suspeito ignorado:", price);
+      return null;
+    }
+
+    return price;
   } catch (error) {
     console.error("Erro Puppeteer:", error.message);
     return null;
