@@ -25,7 +25,7 @@ async function getSheetData() {
   return res.data.values;
 }
 
-// 🔥 NOVA FUNÇÃO COM PUPPETEER (FUNCIONA DE VERDADE)
+// 🔥 FUNÇÃO AJUSTADA (PRECISÃO REAL)
 async function fetchPriceAliExpress(url) {
   try {
     const browser = await puppeteer.launch({
@@ -35,24 +35,30 @@ async function fetchPriceAliExpress(url) {
 
     const page = await browser.newPage();
 
+    // ✅ simula navegador real BR
     await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
     );
+
+    await page.setExtraHTTPHeaders({
+      "Accept-Language": "pt-BR,pt;q=0.9",
+    });
+
+    await page.emulateTimezone("America/Sao_Paulo");
 
     await page.goto(url, { waitUntil: "networkidle2" });
 
-    // 🔥 espera elementos principais carregarem
+    // espera carregar tudo
     await page.waitForSelector("body", { timeout: 15000 });
 
-    // pequeno delay pra renderizar preço correto
-    await new Promise((r) => setTimeout(r, 3000));
+    // pequeno delay pra garantir renderização real
+    await new Promise((r) => setTimeout(r, 4000));
 
     const priceText = await page.evaluate(() => {
-      // 🔥 ordem de prioridade (mais confiável primeiro)
       const selectors = [
-        "[class*='price--currentPriceText']", // preço principal atual
-        "[class*='price-default--current']", // fallback comum
-        "[class*='uniform-banner-box-price']", // promoções
+        "[class*='price--currentPriceText']", // principal
+        "[class*='price-default--current']",  // fallback
+        "[class*='uniform-banner-box-price']", // promo
       ];
 
       for (const selector of selectors) {
@@ -72,7 +78,7 @@ async function fetchPriceAliExpress(url) {
       return null;
     }
 
-    // 🔥 limpeza mais robusta
+    // 🔥 limpeza robusta
     const price = parseFloat(
       priceText
         .replace(/\s/g, "")
@@ -81,12 +87,6 @@ async function fetchPriceAliExpress(url) {
     );
 
     if (isNaN(price)) return null;
-
-    // 🔥 filtro anti-preço fake (opcional, mas MUITO útil)
-    if (price < 10) {
-      console.warn("Preço suspeito ignorado:", price);
-      return null;
-    }
 
     return price;
   } catch (error) {
