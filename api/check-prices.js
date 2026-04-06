@@ -25,7 +25,7 @@ async function getSheetData() {
   return res.data.values;
 }
 
-// 🔥 FUNÇÃO AJUSTADA (PRECISÃO REAL)
+// 🔥 FUNÇÃO ROBUSTA (ANTI BUG + ANTI BOT BÁSICO)
 async function fetchPriceAliExpress(url) {
   try {
     const browser = await puppeteer.launch({
@@ -35,7 +35,7 @@ async function fetchPriceAliExpress(url) {
 
     const page = await browser.newPage();
 
-    // ✅ simula navegador real BR
+    // simula navegador BR
     await page.setUserAgent(
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
     );
@@ -46,30 +46,42 @@ async function fetchPriceAliExpress(url) {
 
     await page.emulateTimezone("America/Sao_Paulo");
 
-    await page.goto(url, { waitUntil: "networkidle2" });
+    await page.goto(url, { waitUntil: "domcontentloaded" });
 
-    // espera carregar tudo
-    await page.waitForSelector("body", { timeout: 15000 });
+    // espera renderizar
+    await new Promise((r) => setTimeout(r, 6000));
 
-    // pequeno delay pra garantir renderização real
-    await new Promise((r) => setTimeout(r, 4000));
+    let priceText = null;
 
-    const priceText = await page.evaluate(() => {
-      const selectors = [
-        "[class*='price--currentPriceText']", // principal
-        "[class*='price-default--current']",  // fallback
-        "[class*='uniform-banner-box-price']", // promo
-      ];
+    // 🔥 tenta até 3 vezes pegar preço válido
+    for (let i = 0; i < 3; i++) {
+      priceText = await page.evaluate(() => {
+        const selectors = [
+          "[class*='price--currentPriceText']",
+          "[class*='price-default--current']",
+          "[class*='uniform-banner-box-price']",
+          "[class*='price']",
+        ];
 
-      for (const selector of selectors) {
-        const el = document.querySelector(selector);
-        if (el && el.innerText) {
-          return el.innerText;
+        for (const selector of selectors) {
+          const elements = document.querySelectorAll(selector);
+
+          for (const el of elements) {
+            const text = el.innerText;
+
+            if (text && text.includes("R$")) {
+              return text;
+            }
+          }
         }
-      }
 
-      return null;
-    });
+        return null;
+      });
+
+      if (priceText) break;
+
+      await new Promise((r) => setTimeout(r, 3000));
+    }
 
     await browser.close();
 
@@ -78,7 +90,6 @@ async function fetchPriceAliExpress(url) {
       return null;
     }
 
-    // 🔥 limpeza robusta
     const price = parseFloat(
       priceText
         .replace(/\s/g, "")
@@ -86,9 +97,7 @@ async function fetchPriceAliExpress(url) {
         .replace(",", ".")
     );
 
-    if (isNaN(price)) return null;
-
-    return price;
+    return isNaN(price) ? null : price;
   } catch (error) {
     console.error("Erro Puppeteer:", error.message);
     return null;
