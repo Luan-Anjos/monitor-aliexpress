@@ -2,7 +2,7 @@ name: Monitor AliExpress
 
 on:
   schedule:
-    - cron: "0 */6 * * *" # roda a cada 6 horas
+    - cron: "0 * * * *" # roda a cada 1 horas
   workflow_dispatch:
 
 jobs:
