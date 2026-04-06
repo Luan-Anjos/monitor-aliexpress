@@ -9,6 +9,7 @@ const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const GOOGLE_SERVICE_ACCOUNT = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
 
+// ================= GOOGLE SHEETS =================
 async function getSheetData() {
   const auth = new google.auth.GoogleAuth({
     credentials: GOOGLE_SERVICE_ACCOUNT,
@@ -25,53 +26,32 @@ async function getSheetData() {
   return res.data.values;
 }
 
-// 🔥 FUNÇÃO ROBUSTA (ANTI BUG + ANTI BOT BÁSICO)
-async function fetchPriceAliExpress(url) {
+// ================= PUPPETEER =================
+async function fetchPriceAliExpress(page, url) {
   try {
-    const browser = await puppeteer.launch({
-      headless: "new",
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    });
+    await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
 
-    const page = await browser.newPage();
+    // Espera seletor mais confiável
+    await page.waitForSelector("body", { timeout: 15000 });
 
-    // simula navegador BR
-    await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
-    );
-
-    await page.setExtraHTTPHeaders({
-      "Accept-Language": "pt-BR,pt;q=0.9",
-    });
-
-    await page.emulateTimezone("America/Sao_Paulo");
-
-    await page.goto(url, { waitUntil: "domcontentloaded" });
-
-    // espera renderizar
-    await new Promise((r) => setTimeout(r, 6000));
+    // Aguarda um pouco para render JS
+    await new Promise((r) => setTimeout(r, 5000));
 
     let priceText = null;
 
-    // 🔥 tenta até 3 vezes pegar preço válido
-    for (let i = 0; i < 3; i++) {
+    for (let attempt = 0; attempt < 2; attempt++) {
       priceText = await page.evaluate(() => {
         const selectors = [
-          "[class*='price--currentPriceText']",
-          "[class*='price-default--current']",
-          "[class*='uniform-banner-box-price']",
-          "[class*='price']",
+          '[class*="price--currentPriceText"]',
+          '[class*="price-default--current"]',
+          '[class*="uniform-banner-box-price"]',
+          '[class*="price-current"]',
         ];
 
         for (const selector of selectors) {
-          const elements = document.querySelectorAll(selector);
-
-          for (const el of elements) {
-            const text = el.innerText;
-
-            if (text && text.includes("R$")) {
-              return text;
-            }
+          const el = document.querySelector(selector);
+          if (el && el.innerText.includes("R$")) {
+            return el.innerText;
           }
         }
 
@@ -80,13 +60,18 @@ async function fetchPriceAliExpress(url) {
 
       if (priceText) break;
 
+      // tenta recarregar se falhar
       await new Promise((r) => setTimeout(r, 3000));
+      await page.reload({ waitUntil: "networkidle2" });
     }
 
-    await browser.close();
-
+    // DEBUG (print da tela)
     if (!priceText) {
-      console.warn("Preço não encontrado com Puppeteer");
+      await page.screenshot({
+        path: `debug-${Date.now()}.png`,
+        fullPage: true,
+      });
+      console.warn(`❌ Preço não encontrado: ${url}`);
       return null;
     }
 
@@ -99,11 +84,12 @@ async function fetchPriceAliExpress(url) {
 
     return isNaN(price) ? null : price;
   } catch (error) {
-    console.error("Erro Puppeteer:", error.message);
+    console.error(`Erro ao buscar preço (${url}):`, error.message);
     return null;
   }
 }
 
+// ================= DISCORD =================
 async function sendDiscordMessage(message) {
   try {
     await axios.post(DISCORD_WEBHOOK_URL, { content: message });
@@ -112,6 +98,7 @@ async function sendDiscordMessage(message) {
   }
 }
 
+// ================= HANDLER =================
 export default async function handler(req, res) {
   if (req.method !== "GET") {
     return res.status(405).send("Método não permitido");
@@ -126,6 +113,25 @@ export default async function handler(req, res) {
   let reportMessages = [];
   let changesCount = 0;
 
+  // 🔥 abre browser UMA vez só
+  const browser = await puppeteer.launch({
+    headless: "new",
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
+
+  const page = await browser.newPage();
+
+  // simula navegador real
+  await page.setUserAgent(
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+  );
+
+  await page.setExtraHTTPHeaders({
+    "Accept-Language": "pt-BR,pt;q=0.9",
+  });
+
+  await page.emulateTimezone("America/Sao_Paulo");
+
   for (const row of rows) {
     const productName = row[0];
     const storePriceText = row[2];
@@ -139,7 +145,9 @@ export default async function handler(req, res) {
 
     if (isNaN(storePrice)) continue;
 
-    const currentPrice = await fetchPriceAliExpress(productLink);
+    console.log(`🔎 Verificando: ${productName}`);
+
+    const currentPrice = await fetchPriceAliExpress(page, productLink);
 
     if (currentPrice === null) {
       reportMessages.push(`⚠️ Não foi possível obter o preço de **${productName}**`);
@@ -168,6 +176,8 @@ Status: ${status}
 Link: ${productLink}`
     );
   }
+
+  await browser.close();
 
   const headerMessage = `🕵️‍♂️ Verificação de preços do AliExpress - Resultado: ${changesCount} produto(s) com alteração`;
 
