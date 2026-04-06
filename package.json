@@ -1,0 +1,20 @@
+{
+  "name": "monitor-aliexpress",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node test.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.14.0",
+    "cheerio": "^1.2.0",
+    "dotenv": "^16.6.1",
+    "googleapis": "^171.4.0",
+    "puppeteer": "^24.40.0"
+  }
+}
