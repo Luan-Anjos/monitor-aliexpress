@@ -5,7 +5,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "dev": "node test.js"
+    "start": "node run.js"
   },
   "keywords": [],
   "author": "",
