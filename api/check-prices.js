@@ -4,6 +4,7 @@ dotenv.config();
 import { google } from "googleapis";
 import axios from "axios";
 
+// 🔥 Puppeteer + Stealth
 import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 
@@ -33,81 +34,68 @@ async function getSheetData() {
 // ================= PEGAR PREÇO =================
 async function fetchPriceAliExpress(page, url) {
   try {
+    await page.setViewport({ width: 1366, height: 768 });
+
     await page.goto(url, {
       waitUntil: "domcontentloaded",
       timeout: 60000,
     });
 
-    // 🔥 força comportamento BR
-    await page.setCookie({
-      name: "aep_usuc_f",
-      value: "site=bra&c_tp=BRL&region=BR&b_locale=pt_BR",
-      domain: ".aliexpress.com",
-    });
+    // espera JS carregar
+    await new Promise((r) => setTimeout(r, 7000));
 
-    await page.waitForTimeout(5000);
+    const price = await page.evaluate(() => {
+      // 🔥 MÉTODO PRINCIPAL (JS interno do AliExpress)
+      try {
+        const data = window.runParams || window.__INIT_DATA__;
 
-    await page.mouse.move(100, 100);
+        if (data) {
+          const priceModule =
+            data?.data?.priceModule ||
+            data?.data?.root?.fields?.priceModule;
 
-    let priceText = null;
-
-    for (let attempt = 0; attempt < 3; attempt++) {
-      priceText = await page.evaluate(() => {
-        const selectors = [
-          '[class*="price--currentPriceText"]',
-          '[class*="price-default--current"]',
-          '[class*="uniform-banner-box-price"]',
-          '[class*="price-current"]',
-          'span[class*="price"]',
-        ];
-
-        for (const selector of selectors) {
-          const elements = document.querySelectorAll(selector);
-
-          for (const el of elements) {
-            const text = el.innerText;
-
-            if (
-              text &&
-              text.includes("R$") &&
-              text.length < 20 &&
-              /\d/.test(text)
-            ) {
-              return text;
-            }
+          if (priceModule) {
+            return (
+              priceModule.formatedActivityPrice ||
+              priceModule.formatedPrice ||
+              priceModule.minActivityAmount?.value ||
+              priceModule.minAmount?.value
+            );
           }
         }
+      } catch (e) {}
 
-        return null;
-      });
+      // 🔥 FALLBACK HTML
+      const selectors = [
+        '[class*="price--currentPriceText"]',
+        '[class*="price-default--current"]',
+        '[class*="uniform-banner-box-price"]',
+      ];
 
-      if (priceText) break;
+      for (const sel of selectors) {
+        const el = document.querySelector(sel);
+        if (el && el.innerText.includes("R$")) {
+          return el.innerText;
+        }
+      }
 
-      console.log("🔄 Tentando novamente...");
-      await page.waitForTimeout(4000);
-      await page.reload({ waitUntil: "domcontentloaded" });
-    }
+      return null;
+    });
 
-    if (!priceText) {
-      await page.screenshot({
-        path: `erro-${Date.now()}.png`,
-        fullPage: true,
-      });
-
+    if (!price) {
       console.warn(`❌ Preço não encontrado: ${url}`);
       return null;
     }
 
-    console.log("💰 Preço encontrado:", priceText);
-
-    const price = parseFloat(
-      priceText
+    const parsed = parseFloat(
+      price
+        .toString()
         .replace(/\s/g, "")
         .replace(/[^\d,\.]/g, "")
         .replace(",", ".")
     );
 
-    return isNaN(price) ? null : price;
+    return isNaN(parsed) ? null : parsed;
 
   } catch (error) {
     console.error(`Erro ao buscar preço (${url}):`, error.message);
@@ -126,7 +114,7 @@ async function sendDiscordMessage(message) {
 
 // ================= HANDLER =================
 export default async function handler(req, res) {
-  if (req.method !== "GET") {
+  if (req.method && req.method !== "GET") {
     return res.status(405).send("Método não permitido");
   }
 
@@ -139,13 +127,10 @@ export default async function handler(req, res) {
   let reportMessages = [];
   let changesCount = 0;
 
+  // 🔥 Browser stealth
   const browser = await puppeteer.launch({
-    headless: "new",
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-blink-features=AutomationControlled",
-    ],
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
   });
 
   const page = await browser.newPage();
@@ -154,16 +139,8 @@ export default async function handler(req, res) {
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
   );
 
-  await page.setViewport({ width: 1366, height: 768 });
-
   await page.setExtraHTTPHeaders({
     "Accept-Language": "pt-BR,pt;q=0.9",
-  });
-
-  await page.evaluateOnNewDocument(() => {
-    Object.defineProperty(navigator, "webdriver", {
-      get: () => false,
-    });
   });
 
   for (const row of rows) {
@@ -188,16 +165,15 @@ export default async function handler(req, res) {
       continue;
     }
 
-    let status = "";
     const diff = currentPrice - storePrice;
     const diffPercent = ((diff / storePrice) * 100).toFixed(2);
 
-    if (diff === 0) {
-      status = "⚪ preço igual";
-    } else if (diff < 0) {
+    let status = "⚪ preço igual";
+
+    if (diff < 0) {
       status = `🟢 preço caiu ${Math.abs(diffPercent)}%`;
       changesCount++;
-    } else {
+    } else if (diff > 0) {
       status = `🔴 preço subiu ${diffPercent}%`;
       changesCount++;
     }
