@@ -4,7 +4,6 @@ dotenv.config();
 import { google } from "googleapis";
 import axios from "axios";
 
-// 🔥 PUPPETEER COM STEALTH (ANTI-BOT)
 import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 
@@ -34,13 +33,21 @@ async function getSheetData() {
 // ================= PEGAR PREÇO =================
 async function fetchPriceAliExpress(page, url) {
   try {
-    await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
+    await page.goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
+    });
 
-    // simula humano
+    // 🔥 força comportamento BR
+    await page.setCookie({
+      name: "aep_usuc_f",
+      value: "site=bra&c_tp=BRL&region=BR&b_locale=pt_BR",
+      domain: ".aliexpress.com",
+    });
+
+    await page.waitForTimeout(5000);
+
     await page.mouse.move(100, 100);
-    await page.waitForTimeout(3000);
-
-    await page.waitForSelector("body", { timeout: 20000 });
 
     let priceText = null;
 
@@ -78,7 +85,7 @@ async function fetchPriceAliExpress(page, url) {
 
       console.log("🔄 Tentando novamente...");
       await page.waitForTimeout(4000);
-      await page.reload({ waitUntil: "networkidle2" });
+      await page.reload({ waitUntil: "domcontentloaded" });
     }
 
     if (!priceText) {
@@ -132,9 +139,8 @@ export default async function handler(req, res) {
   let reportMessages = [];
   let changesCount = 0;
 
-  // 🔥 BROWSER (CONFIG ANTI-BOT)
   const browser = await puppeteer.launch({
-    headless: "new", // importante pro GitHub Actions
+    headless: "new",
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
@@ -144,7 +150,6 @@ export default async function handler(req, res) {
 
   const page = await browser.newPage();
 
-  // simula navegador real
   await page.setUserAgent(
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
   );
@@ -155,7 +160,6 @@ export default async function handler(req, res) {
     "Accept-Language": "pt-BR,pt;q=0.9",
   });
 
-  // remove detecção de bot
   await page.evaluateOnNewDocument(() => {
     Object.defineProperty(navigator, "webdriver", {
       get: () => false,
