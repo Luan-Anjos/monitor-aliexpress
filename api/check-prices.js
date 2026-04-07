@@ -29,65 +29,63 @@ async function getSheetData() {
   return res.data.values;
 }
 
-// ================= PEGAR PREÇO =================
+// ================= DEBUG PREÇO =================
 async function fetchPriceAliExpress(page, url) {
   try {
+    console.log("🌐 Acessando:", url);
+
     await page.goto(url, {
       waitUntil: "networkidle2",
       timeout: 60000,
     });
 
-    // 🔥 espera render completo
-    await new Promise((r) => setTimeout(r, 8000));
+    console.log("✅ Página carregada");
 
-    for (let tentativa = 0; tentativa < 3; tentativa++) {
-      const result = await page.evaluate(() => {
-        const candidates = [];
+    await new Promise((r) => setTimeout(r, 10000));
 
-        const elements = document.querySelectorAll("span, div");
+    // 🔥 salva screenshot no GitHub Actions
+    const screenshotPath = `debug-${Date.now()}.png`;
+    await page.screenshot({ path: screenshotPath, fullPage: true });
+    console.log("📸 Screenshot salvo:", screenshotPath);
 
-        elements.forEach((el) => {
-          const text = el.innerText;
+    // 🔥 pega TODOS textos da página
+    const allTexts = await page.evaluate(() => {
+      return Array.from(document.querySelectorAll("span, div"))
+        .map((el) => el.innerText)
+        .filter((text) => text && text.includes("R$"));
+    });
 
-          if (!text) return;
+    console.log("💰 Textos com R$ encontrados:", allTexts);
 
-          // pega só valores reais em R$
-          if (text.includes("R$")) {
-            // ignora parcelas e textos longos
-            if (text.includes("x") || text.length > 20) return;
-
-            candidates.push(text);
-          }
-        });
-
-        return candidates;
-      });
-
-      if (result && result.length > 0) {
-        // pega o menor valor válido (normalmente é o preço real)
-        const prices = result
-          .map((text) =>
-            parseFloat(
-              text.replace(/[^\d,]/g, "").replace(",", ".")
-            )
-          )
-          .filter((p) => !isNaN(p) && p > 1);
-
-        if (prices.length > 0) {
-          return Math.min(...prices);
-        }
-      }
-
-      // tenta de novo
-      await new Promise((r) => setTimeout(r, 4000));
-      await page.reload({ waitUntil: "networkidle2" });
+    if (!allTexts || allTexts.length === 0) {
+      console.log("❌ Nenhum preço encontrado no HTML");
+      return null;
     }
 
-    console.warn("❌ Preço não encontrado:", url);
-    return null;
+    // 🔥 tenta extrair preços válidos
+    const prices = allTexts
+      .map((text) => {
+        const num = parseFloat(
+          text.replace(/[^\d,]/g, "").replace(",", ".")
+        );
+        return num;
+      })
+      .filter((p) => !isNaN(p) && p > 1);
+
+    console.log("📊 Preços parseados:", prices);
+
+    if (prices.length === 0) {
+      console.log("❌ Nenhum preço válido após parse");
+      return null;
+    }
+
+    const finalPrice = Math.min(...prices);
+    console.log("✅ Preço final escolhido:", finalPrice);
+
+    return finalPrice;
 
   } catch (error) {
-    console.error("Erro Puppeteer:", error.message);
+    console.error("🔥 ERRO Puppeteer:", error.message);
     return null;
   }
 }
@@ -144,7 +142,7 @@ export default async function handler(req, res) {
 
     if (isNaN(storePrice)) continue;
 
-    console.log("🔎", productName);
+    console.log("🔎 Verificando:", productName);
 
     const currentPrice = await fetchPriceAliExpress(page, productLink);
 
