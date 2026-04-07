@@ -34,7 +34,6 @@ async function fetchPriceAliExpress(page, url) {
   try {
     console.log("🌐 Acessando (mobile):", url);
 
-    // 🔥 força mobile
     await page.setUserAgent(
       "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile Safari/604.1"
     );
@@ -50,15 +49,34 @@ async function fetchPriceAliExpress(page, url) {
       timeout: 60000,
     });
 
-    // espera render
-    await new Promise((r) => setTimeout(r, 8000));
+    await new Promise((r) => setTimeout(r, 10000));
 
-    // screenshot debug
-    const screenshotPath = `debug-mobile-${Date.now()}.png`;
-    await page.screenshot({ path: screenshotPath, fullPage: true });
-    console.log("📸 Screenshot:", screenshotPath);
+    const title = await page.title();
+    const currentUrl = page.url();
+    const html = await page.content();
 
-    // pega preço
+    console.log("📄 Título da página:", title);
+    console.log("🔗 URL final:", currentUrl);
+    console.log("📦 HTML size:", html.length);
+
+    await page.screenshot({
+      path: "debug-mobile.png",
+      fullPage: true,
+    });
+
+    const fs = await import("node:fs/promises");
+    await fs.writeFile("debug-page.html", html, "utf8");
+
+    const allTexts = await page.evaluate(() => {
+      return Array.from(document.querySelectorAll("span, div"))
+        .map((el) => el.innerText?.trim())
+        .filter(Boolean)
+        .filter((text) => text.includes("R$"))
+        .slice(0, 30);
+    });
+
+    console.log("💰 Textos com R$ encontrados:", allTexts);
+
     const priceText = await page.evaluate(() => {
       const selectors = [
         '[class*="price-current"]',
@@ -69,39 +87,21 @@ async function fetchPriceAliExpress(page, url) {
 
       for (const selector of selectors) {
         const el = document.querySelector(selector);
-        if (el && el.innerText.includes("R$")) {
-          return el.innerText;
-        }
+        if (el?.innerText) return el.innerText;
       }
 
-      // fallback: busca qualquer R$
-      const all = Array.from(document.querySelectorAll("span, div"))
-        .map((el) => el.innerText)
-        .filter((t) => t && t.includes("R$"));
-
-      return all.length ? all[0] : null;
+      return null;
     });
 
     console.log("💰 Texto capturado:", priceText);
 
-    if (!priceText) {
-      console.log("❌ Não encontrou preço");
-      return null;
-    }
+    if (!priceText) return null;
 
     const price = parseFloat(
       priceText.replace(/[^\d,]/g, "").replace(",", ".")
     );
 
-    if (isNaN(price)) {
-      console.log("❌ Falha ao converter preço");
-      return null;
-    }
-
-    console.log("✅ Preço final:", price);
-
-    return price;
-
+    return Number.isNaN(price) ? null : price;
   } catch (error) {
     console.error("🔥 Erro Puppeteer:", error.message);
     return null;
