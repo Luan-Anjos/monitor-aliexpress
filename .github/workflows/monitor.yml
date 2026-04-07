@@ -2,28 +2,31 @@ name: Monitor AliExpress
 
 on:
   schedule:
-    - cron: "0 * * * *" # roda a cada 1 horas
+    - cron: "0 * * * *" # ⏰ roda de 1 em 1 hora
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
-  run-script:
+  run-monitor:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Clonar repositório
+      - name: Checkout código
         uses: actions/checkout@v4
 
       - name: Configurar Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Instalar dependências
         run: npm install
 
-      - name: Rodar script
-        run: npm start
+      - name: Rodar monitor
+        run: node run.js
         env:
-          GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
