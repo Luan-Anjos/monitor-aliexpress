@@ -3,8 +3,6 @@ dotenv.config();
 
 import { google } from "googleapis";
 import axios from "axios";
-
-// 🔥 Puppeteer + Stealth
 import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 
@@ -31,88 +29,65 @@ async function getSheetData() {
   return res.data.values;
 }
 
-// ================= CAPTURA DE PREÇO =================
+// ================= PEGAR PREÇO =================
 async function fetchPriceAliExpress(page, url) {
   try {
-    let capturedPrice = null;
-
-    // 🔥 limpa listeners antigos
-    page.removeAllListeners("response");
-
-    // 🔥 intercepta API interna
-    page.on("response", async (response) => {
-      try {
-        const reqUrl = response.url();
-
-        if (reqUrl.includes("mtop.aliexpress.com")) {
-          const text = await response.text();
-
-          if (text.includes("priceModule")) {
-            const json = JSON.parse(text);
-
-            const priceModule = json?.data?.priceModule;
-
-            const price =
-              priceModule?.formatedActivityPrice ||
-              priceModule?.formatedPrice ||
-              priceModule?.minActivityAmount?.value ||
-              priceModule?.minAmount?.value;
-
-            if (price && !capturedPrice) {
-              capturedPrice = price;
-            }
-          }
-        }
-      } catch (e) {}
-    });
-
     await page.goto(url, {
       waitUntil: "networkidle2",
       timeout: 60000,
     });
 
-    // aguarda requisições da API
+    // 🔥 espera render completo
     await new Promise((r) => setTimeout(r, 8000));
 
-    // 🔥 fallback se API falhar
-    if (!capturedPrice) {
-      console.warn("⚠️ API falhou, tentando HTML...");
+    for (let tentativa = 0; tentativa < 3; tentativa++) {
+      const result = await page.evaluate(() => {
+        const candidates = [];
 
-      capturedPrice = await page.evaluate(() => {
-        const selectors = [
-          '[class*="price--currentPriceText"]',
-          '[class*="price-default--current"]',
-          '[class*="uniform-banner-box-price"]',
-        ];
+        const elements = document.querySelectorAll("span, div");
 
-        for (const sel of selectors) {
-          const el = document.querySelector(sel);
-          if (el && el.innerText.includes("R$")) {
-            return el.innerText;
+        elements.forEach((el) => {
+          const text = el.innerText;
+
+          if (!text) return;
+
+          // pega só valores reais em R$
+          if (text.includes("R$")) {
+            // ignora parcelas e textos longos
+            if (text.includes("x") || text.length > 20) return;
+
+            candidates.push(text);
           }
-        }
+        });
 
-        return null;
+        return candidates;
       });
+
+      if (result && result.length > 0) {
+        // pega o menor valor válido (normalmente é o preço real)
+        const prices = result
+          .map((text) =>
+            parseFloat(
+              text.replace(/[^\d,]/g, "").replace(",", ".")
+            )
+          )
+          .filter((p) => !isNaN(p) && p > 1);
+
+        if (prices.length > 0) {
+          return Math.min(...prices);
+        }
+      }
+
+      // tenta de novo
+      await new Promise((r) => setTimeout(r, 4000));
+      await page.reload({ waitUntil: "networkidle2" });
     }
 
-    if (!capturedPrice) {
-      console.warn(`❌ Preço não encontrado: ${url}`);
-      return null;
-    }
-
-    const parsed = parseFloat(
-      capturedPrice
-        .toString()
-        .replace(/\s/g, "")
-        .replace(/[^\d,\.]/g, "")
-        .replace(",", ".")
-    );
-
-    return isNaN(parsed) ? null : parsed;
+    console.warn("❌ Preço não encontrado:", url);
+    return null;
 
   } catch (error) {
-    console.error(`Erro ao buscar preço (${url}):`, error.message);
+    console.error("Erro Puppeteer:", error.message);
     return null;
   }
 }
@@ -122,34 +97,31 @@ async function sendDiscordMessage(message) {
   try {
     await axios.post(DISCORD_WEBHOOK_URL, { content: message });
   } catch (error) {
-    console.error("Erro ao enviar mensagem no Discord:", error.message);
+    console.error("Erro ao enviar mensagem:", error.message);
   }
 }
 
 // ================= HANDLER =================
 export default async function handler(req, res) {
-  if (req.method && req.method !== "GET") {
+  if (req.method !== "GET") {
     return res.status(405).send("Método não permitido");
   }
 
   const rows = await getSheetData();
 
   if (!rows || rows.length === 0) {
-    return res.status(200).send("Nenhum dado encontrado na planilha.");
+    return res.status(200).send("Nenhum dado encontrado.");
   }
 
   let reportMessages = [];
   let changesCount = 0;
 
-  // 🔥 inicia browser
   const browser = await puppeteer.launch({
     headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
   });
 
   const page = await browser.newPage();
-
-  await page.setViewport({ width: 1366, height: 768 });
 
   await page.setUserAgent(
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
@@ -167,12 +139,12 @@ export default async function handler(req, res) {
     if (!productLink || !storePriceText) continue;
 
     const storePrice = parseFloat(
-      storePriceText.replace(/[^\d,\.]/g, "").replace(",", ".")
+      storePriceText.replace(/[^\d,]/g, "").replace(",", ".")
     );
 
     if (isNaN(storePrice)) continue;
 
-    console.log(`🔎 Verificando: ${productName}`);
+    console.log("🔎", productName);
 
     const currentPrice = await fetchPriceAliExpress(page, productLink);
 
@@ -184,19 +156,21 @@ export default async function handler(req, res) {
     const diff = currentPrice - storePrice;
     const diffPercent = ((diff / storePrice) * 100).toFixed(2);
 
-    let status = "⚪ preço igual";
+    let status = "";
 
-    if (diff < 0) {
-      status = `🟢 preço caiu ${Math.abs(diffPercent)}%`;
+    if (diff === 0) {
+      status = "⚪ preço igual";
+    } else if (diff < 0) {
+      status = `🟢 caiu ${Math.abs(diffPercent)}%`;
       changesCount++;
-    } else if (diff > 0) {
-      status = `🔴 preço subiu ${diffPercent}%`;
+    } else {
+      status = `🔴 subiu ${diffPercent}%`;
       changesCount++;
     }
 
     reportMessages.push(
       `🛒 **${productName}**
-Preço da planilha: R$ ${storePrice.toFixed(2)}
+Preço planilha: R$ ${storePrice.toFixed(2)}
 Preço atual: R$ ${currentPrice.toFixed(2)}
 Status: ${status}
 Link: ${productLink}`
@@ -205,11 +179,11 @@ Link: ${productLink}`
 
   await browser.close();
 
-  const headerMessage = `🕵️‍♂️ Verificação de preços do AliExpress - Resultado: ${changesCount} produto(s) com alteração`;
+  const header = `🕵️‍♂️ Verificação - ${changesCount} alteração(ões)`;
 
-  await sendDiscordMessage(`${headerMessage}\n\n${reportMessages.join("\n\n")}`);
+  await sendDiscordMessage(`${header}\n\n${reportMessages.join("\n\n")}`);
 
   return res.status(200).json({
-    message: `Verificação concluída. ${changesCount} produto(s) com alteração.`,
+    message: `Finalizado com ${changesCount} alterações`,
   });
 }
