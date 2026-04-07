@@ -1,49 +1,69 @@
 import axios from "axios";
+import { logger } from "../utils/logger.js";
 
-const DISCORD_LIMIT = 1900;
-
-function chunkMessage(text, maxLength = DISCORD_LIMIT) {
-  const chunks = [];
+function splitMessage(message, maxLength = 1800) {
+  const lines = String(message || "").split("\n");
+  const parts = [];
   let current = "";
 
-  for (const block of text.split("\n\n")) {
-    const candidate = current ? `${current}\n\n${block}` : block;
+  for (const line of lines) {
+    const candidate = current ? `${current}\n${line}` : line;
 
-    if (candidate.length <= maxLength) {
+    if (candidate.length > maxLength) {
+      if (current.trim()) parts.push(current);
+      current = line;
+    } else {
       current = candidate;
-      continue;
-    }
-
-    if (current) {
-      chunks.push(current);
-      current = "";
-    }
-
-    if (block.length <= maxLength) {
-      current = block;
-      continue;
-    }
-
-    for (let i = 0; i < block.length; i += maxLength) {
-      chunks.push(block.slice(i, i + maxLength));
     }
   }
 
-  if (current) chunks.push(current);
-  return chunks;
+  if (current.trim()) {
+    parts.push(current);
+  }
+
+  return parts;
 }
 
-export async function sendDiscordReport(webhookUrl, message, logger) {
+export async function sendDiscordReport(webhookUrl, message) {
   if (!webhookUrl) {
-    logger.info("Webhook do Discord não configurada. Relatório não enviado.");
-    return;
+    logger.warn("DISCORD_WEBHOOK_URL não configurado. Envio ao Discord ignorado.");
+    return { ok: false, skipped: true };
   }
 
-  const chunks = chunkMessage(message);
+  const parts = splitMessage(message);
 
-  for (const chunk of chunks) {
-    await axios.post(webhookUrl, { content: chunk });
+  for (const part of parts) {
+    try {
+      await axios.post(
+        webhookUrl,
+        { content: part },
+        {
+          timeout: 15000,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+    } catch (error) {
+      const status = error?.response?.status;
+      const data = error?.response?.data;
+
+      logger.error("Falha ao enviar mensagem ao Discord.", {
+        status,
+        data,
+        error: error.message,
+      });
+
+      return {
+        ok: false,
+        skipped: false,
+        error: error.message,
+        status,
+        data,
+      };
+    }
   }
 
-  logger.info(`Relatório enviado ao Discord em ${chunks.length} mensagem(ns).`);
+  logger.info("Relatório enviado ao Discord com sucesso.");
+  return { ok: true };
 }
