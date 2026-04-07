@@ -7,33 +7,120 @@ import { sendDiscordReport } from "../services/discord.js";
 import { createBrowser, getPriceWithBrowser } from "../services/aliexpressBrowser.js";
 import { getPriceWithRapidAPI } from "../services/aliexpressRapidApi.js";
 
-function buildReport(results) {
+function calculateVariationPercent(oldPrice, newPrice) {
+  if (!Number.isFinite(oldPrice) || !Number.isFinite(newPrice) || oldPrice <= 0) {
+    return null;
+  }
+
+  const percent = ((newPrice - oldPrice) / oldPrice) * 100;
+  return percent;
+}
+
+function getPriceStatus(sheetPrice, currentPrice) {
+  if (!Number.isFinite(sheetPrice) || !Number.isFinite(currentPrice)) {
+    return {
+      emoji: "⚠️",
+      label: "SEM COMPARAÇÃO",
+      variationText: "não disponível",
+      changed: false,
+    };
+  }
+
+  const variation = calculateVariationPercent(sheetPrice, currentPrice);
+
+  if (variation === null) {
+    return {
+      emoji: "⚠️",
+      label: "SEM COMPARAÇÃO",
+      variationText: "não disponível",
+      changed: false,
+    };
+  }
+
+  if (currentPrice > sheetPrice) {
+    return {
+      emoji: "🔺",
+      label: "AUMENTOU",
+      variationText: `+${variation.toFixed(2)}%`,
+      changed: true,
+    };
+  }
+
+  if (currentPrice < sheetPrice) {
+    return {
+      emoji: "🔻",
+      label: "ABAIXOU",
+      variationText: `${variation.toFixed(2)}%`,
+      changed: true,
+    };
+  }
+
+  return {
+    emoji: "➖",
+    label: "SEM ALTERAÇÃO",
+    variationText: "0.00%",
+    changed: false,
+  };
+}
+
+function buildSummary(results) {
   const total = results.length;
-  const changed = results.filter((item) => item.changed).length;
+  const increased = results.filter((item) => item.statusLabel === "AUMENTOU").length;
+  const decreased = results.filter((item) => item.statusLabel === "ABAIXOU").length;
+  const unchanged = results.filter((item) => item.statusLabel === "SEM ALTERAÇÃO").length;
   const withoutPrice = results.filter((item) => !item.currentPrice).length;
 
-  const lines = [
-    "🕵️ Verificação do AliExpress",
-    `Total analisado: ${total}`,
-    `Alterações: ${changed}`,
-    `Sem preço: ${withoutPrice}`,
+  return [
+    "📊 **Relatório de Preço**",
+    "",
+    `📦 Total analisado: ${total}`,
+    `🔺 Aumentaram: ${increased}`,
+    `🔻 Abaixaram: ${decreased}`,
+    `➖ Iguais: ${unchanged}`,
+    `⚠️ Sem preço: ${withoutPrice}`,
     "",
   ];
+}
+
+function buildProductBlock(item) {
+  if (!item.currentPrice) {
+    return [
+      `⚠️ **Produto: ${item.name}**`,
+      "",
+      "┌───────────────",
+      `│ 💰 Anterior: ${formatPrice(item.sheetPrice)}`,
+      "│ 💰 Atual:    não encontrado",
+      "└───────────────",
+      "",
+      "📈 Variação: não disponível",
+      `📌 Situação: SEM PREÇO`,
+      `🧭 Fonte: ${item.source || "desconhecida"}`,
+      `🔗 ${item.url}`,
+      "",
+    ];
+  }
+
+  return [
+    `${item.statusEmoji} **Produto: ${item.name}**`,
+    "",
+    "┌───────────────",
+    `│ 💰 Anterior: ${formatPrice(item.sheetPrice)}`,
+    `│ 💰 Atual:    ${formatPrice(item.currentPrice)}`,
+    "└───────────────",
+    "",
+    `📈 Variação: ${item.statusEmoji} ${item.variationText}`,
+    `📌 Situação: ${item.statusLabel}`,
+    `🧭 Fonte: ${item.source || "desconhecida"}`,
+    `🔗 ${item.url}`,
+    "",
+  ];
+}
+
+function buildReport(results) {
+  const lines = [...buildSummary(results)];
 
   for (const item of results) {
-    const emoji = item.currentPrice ? (item.changed ? "📈" : "✅") : "⚠️";
-
-    lines.push(`${emoji} **${item.name}**`);
-    lines.push(`Preço planilha: ${formatPrice(item.sheetPrice)}`);
-    lines.push(`Preço atual: ${item.currentPrice ? formatPrice(item.currentPrice) : "não encontrado"}`);
-    lines.push(`Fonte usada: ${item.source || "desconhecida"}`);
-
-    if (item.blocked) {
-      lines.push("Observação: possível bloqueio/captcha detectado");
-    }
-
-    lines.push(`Link: ${item.url}`);
-    lines.push("");
+    lines.push(...buildProductBlock(item));
   }
 
   return lines.join("\n");
@@ -55,39 +142,40 @@ export async function runMonitor() {
   const results = [];
 
   try {
-    browser = await createBrowser();
-
-    if (!config.useRapidApi || !config.rapidApiKey) {
-      logger.info("RapidAPI não configurada.");
+    if (config.useBrowserFallback) {
+      browser = await createBrowser();
+    } else {
+      logger.info("Fallback de browser desativado.");
     }
 
     for (let index = 0; index < limitedProducts.length; index += 1) {
       const product = limitedProducts[index];
       logger.info(`[${index + 1}/${limitedProducts.length}] Verificando ${product.name}`);
 
-      let apiResult = await getPriceWithRapidAPI(product);
+      const apiResult = await getPriceWithRapidAPI(product);
       let browserResult = null;
 
-      if (!apiResult?.found) {
+      if (!apiResult?.found && config.useBrowserFallback && browser) {
         browserResult = await getPriceWithBrowser(browser, product);
       }
 
       const finalResult = apiResult?.found ? apiResult : browserResult;
-
       const currentPrice = finalResult?.price || null;
-      const changed =
-        currentPrice !== null &&
-        Number.isFinite(product.sheetPrice) &&
-        currentPrice !== product.sheetPrice;
+
+      const status = getPriceStatus(product.sheetPrice, currentPrice);
 
       results.push({
         name: product.name,
         url: product.url,
         sheetPrice: product.sheetPrice,
         currentPrice,
-        changed,
-        source: finalResult?.source || "nenhuma",
+        changed: status.changed,
+        source: finalResult?.source || (apiResult?.source || "nenhuma"),
         blocked: Boolean(finalResult?.blocked),
+        apiError: apiResult?.error || apiResult?.data?.message || null,
+        statusEmoji: status.emoji,
+        statusLabel: status.label,
+        variationText: status.variationText,
       });
 
       if (index < limitedProducts.length - 1) {
@@ -96,7 +184,11 @@ export async function runMonitor() {
     }
   } finally {
     if (browser) {
-      await browser.close();
+      try {
+        await browser.close();
+      } catch {
+        logger.warn("Browser já estava fechado.");
+      }
     }
   }
 
