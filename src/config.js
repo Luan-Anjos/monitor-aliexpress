@@ -1,87 +1,73 @@
 import dotenv from "dotenv";
-import path from "node:path";
 
 dotenv.config();
 
 function parseBoolean(value, defaultValue = false) {
   if (value === undefined || value === null || value === "") return defaultValue;
-  return ["1", "true", "yes", "y", "on"].includes(String(value).toLowerCase());
+  return String(value).toLowerCase() === "true";
 }
 
-function parseInteger(value, defaultValue) {
-  const parsed = Number.parseInt(value, 10);
+function parseNumber(value, defaultValue) {
+  const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : defaultValue;
 }
 
-function parseJsonEnv(name, { required = false } = {}) {
-  const raw = process.env[name];
+function parseJsonEnv(name, required = false) {
+  const value = process.env[name];
 
-  if (!raw) {
+  if (!value) {
     if (required) {
-      throw new Error(`A variável ${name} não foi definida.`);
+      throw new Error(`Variável obrigatória ausente: ${name}`);
     }
     return null;
   }
 
   try {
-    return JSON.parse(raw);
+    return JSON.parse(value);
   } catch (error) {
-    throw new Error(`A variável ${name} não contém um JSON válido: ${error.message}`);
+    throw new Error(`Variável ${name} contém JSON inválido.`);
   }
 }
 
-export function loadConfig() {
-  const config = {
-    spreadsheetId: process.env.SPREADSHEET_ID || "",
-    googleServiceAccount: parseJsonEnv("GOOGLE_SERVICE_ACCOUNT", { required: true }),
-    googleSheetRange: process.env.GOOGLE_SHEET_RANGE || "A2:H",
-    discordWebhookUrl: process.env.DISCORD_WEBHOOK_URL || "",
+export const config = {
+  spreadsheetId: process.env.SPREADSHEET_ID || "",
+  googleServiceAccount: parseJsonEnv("GOOGLE_SERVICE_ACCOUNT", true),
 
-    columns: {
-      productName: parseInteger(process.env.COLUMN_PRODUCT_NAME, 0),
-      sheetPrice: parseInteger(process.env.COLUMN_SHEET_PRICE, 2),
-      productUrl: parseInteger(process.env.COLUMN_PRODUCT_URL, 7),
-    },
+  discordWebhookUrl: process.env.DISCORD_WEBHOOK_URL || "",
 
-    maxProductsPerRun: parseInteger(process.env.MAX_PRODUCTS_PER_RUN, 0),
-    onlyChanges: parseBoolean(process.env.ONLY_CHANGES, false),
+  googleSheetRange: process.env.GOOGLE_SHEET_RANGE || "A2:H",
+  columnProductName: parseNumber(process.env.COLUMN_PRODUCT_NAME, 0),
+  columnSheetPrice: parseNumber(process.env.COLUMN_SHEET_PRICE, 2),
+  columnProductUrl: parseNumber(process.env.COLUMN_PRODUCT_URL, 7),
 
-    headless: parseBoolean(process.env.HEADLESS, true),
-    logLevel: process.env.LOG_LEVEL || "info",
-    debugArtifacts: parseBoolean(process.env.DEBUG_ARTIFACTS, true),
-    debugDir: path.resolve(process.env.DEBUG_DIR || "./debug"),
+  maxProductsPerRun: parseNumber(process.env.MAX_PRODUCTS_PER_RUN, 0),
+  onlyChanges: parseBoolean(process.env.ONLY_CHANGES, false),
 
-    delayMinMs: parseInteger(process.env.DELAY_MIN_MS, 7000),
-    delayMaxMs: parseInteger(process.env.DELAY_MAX_MS, 15000),
-    requestTimeoutMs: parseInteger(process.env.REQUEST_TIMEOUT_MS, 60000),
-    waitForSelectorTimeoutMs: parseInteger(
-      process.env.WAIT_FOR_SELECTOR_TIMEOUT_MS,
-      25000
-    ),
+  headless: parseBoolean(process.env.HEADLESS, true),
+  logLevel: process.env.LOG_LEVEL || "info",
 
-    targetCountry: process.env.TARGET_COUNTRY || "BR",
-    targetCurrency: process.env.TARGET_CURRENCY || "BRL",
-    targetLanguage: process.env.TARGET_LANGUAGE || "PT",
+  debugArtifacts: parseBoolean(process.env.DEBUG_ARTIFACTS, true),
+  debugDir: process.env.DEBUG_DIR || "./debug",
 
-    puppeteerExecutablePath: process.env.PUPPETEER_EXECUTABLE_PATH || "",
-    puppeteerProxyUrl: process.env.PUPPETEER_PROXY_URL || "",
+  delayMinMs: parseNumber(process.env.DELAY_MIN_MS, 12000),
+  delayMaxMs: parseNumber(process.env.DELAY_MAX_MS, 22000),
+  requestTimeoutMs: parseNumber(process.env.REQUEST_TIMEOUT_MS, 60000),
+  waitForSelectorTimeoutMs: parseNumber(process.env.WAIT_FOR_SELECTOR_TIMEOUT_MS, 35000),
 
-    aliExpress: {
-      appKey: process.env.AE_APP_KEY || "",
-      appSecret: process.env.AE_APP_SECRET || "",
-      trackingId: process.env.AE_TRACKING_ID || "",
-      gatewayUrl: process.env.AE_GATEWAY_URL || "https://eco.taobao.com/router/rest",
-      signMethod: (process.env.AE_SIGN_METHOD || "md5").toLowerCase(),
-    },
-  };
+  targetCountry: process.env.TARGET_COUNTRY || "BR",
+  targetCurrency: process.env.TARGET_CURRENCY || "BRL",
+  targetLanguage: process.env.TARGET_LANGUAGE || "PT",
 
-  if (!config.spreadsheetId) {
-    throw new Error("A variável SPREADSHEET_ID é obrigatória.");
-  }
+  puppeteerExecutablePath: process.env.PUPPETEER_EXECUTABLE_PATH || "",
+  puppeteerProxyUrl: process.env.PUPPETEER_PROXY_URL || "",
 
-  if (config.delayMaxMs < config.delayMinMs) {
-    throw new Error("DELAY_MAX_MS não pode ser menor que DELAY_MIN_MS.");
-  }
+  aeAppKey: process.env.AE_APP_KEY || "",
+  aeAppSecret: process.env.AE_APP_SECRET || "",
+  aeTrackingId: process.env.AE_TRACKING_ID || "",
+  aeGatewayUrl: process.env.AE_GATEWAY_URL || "https://eco.taobao.com/router/rest",
+  aeSignMethod: process.env.AE_SIGN_METHOD || "md5",
+};
 
-  return config;
+if (!config.spreadsheetId) {
+  throw new Error("Variável obrigatória ausente: SPREADSHEET_ID");
 }
