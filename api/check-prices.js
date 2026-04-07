@@ -3,7 +3,12 @@ dotenv.config();
 
 import { google } from "googleapis";
 import axios from "axios";
-import puppeteer from "puppeteer";
+
+// 🔥 PUPPETEER COM STEALTH (ANTI-BOT)
+import puppeteer from "puppeteer-extra";
+import StealthPlugin from "puppeteer-extra-plugin-stealth";
+
+puppeteer.use(StealthPlugin());
 
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
@@ -26,32 +31,43 @@ async function getSheetData() {
   return res.data.values;
 }
 
-// ================= PUPPETEER =================
+// ================= PEGAR PREÇO =================
 async function fetchPriceAliExpress(page, url) {
   try {
     await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
 
-    // Espera seletor mais confiável
-    await page.waitForSelector("body", { timeout: 15000 });
+    // simula humano
+    await page.mouse.move(100, 100);
+    await page.waitForTimeout(3000);
 
-    // Aguarda um pouco para render JS
-    await new Promise((r) => setTimeout(r, 5000));
+    await page.waitForSelector("body", { timeout: 20000 });
 
     let priceText = null;
 
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < 3; attempt++) {
       priceText = await page.evaluate(() => {
         const selectors = [
           '[class*="price--currentPriceText"]',
           '[class*="price-default--current"]',
           '[class*="uniform-banner-box-price"]',
           '[class*="price-current"]',
+          'span[class*="price"]',
         ];
 
         for (const selector of selectors) {
-          const el = document.querySelector(selector);
-          if (el && el.innerText.includes("R$")) {
-            return el.innerText;
+          const elements = document.querySelectorAll(selector);
+
+          for (const el of elements) {
+            const text = el.innerText;
+
+            if (
+              text &&
+              text.includes("R$") &&
+              text.length < 20 &&
+              /\d/.test(text)
+            ) {
+              return text;
+            }
           }
         }
 
@@ -60,20 +76,22 @@ async function fetchPriceAliExpress(page, url) {
 
       if (priceText) break;
 
-      // tenta recarregar se falhar
-      await new Promise((r) => setTimeout(r, 3000));
+      console.log("🔄 Tentando novamente...");
+      await page.waitForTimeout(4000);
       await page.reload({ waitUntil: "networkidle2" });
     }
 
-    // DEBUG (print da tela)
     if (!priceText) {
       await page.screenshot({
-        path: `debug-${Date.now()}.png`,
+        path: `erro-${Date.now()}.png`,
         fullPage: true,
       });
+
       console.warn(`❌ Preço não encontrado: ${url}`);
       return null;
     }
+
+    console.log("💰 Preço encontrado:", priceText);
 
     const price = parseFloat(
       priceText
@@ -83,6 +101,7 @@ async function fetchPriceAliExpress(page, url) {
     );
 
     return isNaN(price) ? null : price;
+
   } catch (error) {
     console.error(`Erro ao buscar preço (${url}):`, error.message);
     return null;
@@ -113,10 +132,14 @@ export default async function handler(req, res) {
   let reportMessages = [];
   let changesCount = 0;
 
-  // 🔥 abre browser UMA vez só
+  // 🔥 BROWSER (CONFIG ANTI-BOT)
   const browser = await puppeteer.launch({
-    headless: "new",
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    headless: "new", // importante pro GitHub Actions
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-blink-features=AutomationControlled",
+    ],
   });
 
   const page = await browser.newPage();
@@ -126,11 +149,18 @@ export default async function handler(req, res) {
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
   );
 
+  await page.setViewport({ width: 1366, height: 768 });
+
   await page.setExtraHTTPHeaders({
     "Accept-Language": "pt-BR,pt;q=0.9",
   });
 
-  await page.emulateTimezone("America/Sao_Paulo");
+  // remove detecção de bot
+  await page.evaluateOnNewDocument(() => {
+    Object.defineProperty(navigator, "webdriver", {
+      get: () => false,
+    });
+  });
 
   for (const row of rows) {
     const productName = row[0];
