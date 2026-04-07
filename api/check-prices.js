@@ -29,63 +29,81 @@ async function getSheetData() {
   return res.data.values;
 }
 
-// ================= DEBUG PREÇO =================
+// ================= FETCH PREÇO (MOBILE) =================
 async function fetchPriceAliExpress(page, url) {
   try {
-    console.log("🌐 Acessando:", url);
+    console.log("🌐 Acessando (mobile):", url);
+
+    // 🔥 força mobile
+    await page.setUserAgent(
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile Safari/604.1"
+    );
+
+    await page.setViewport({
+      width: 390,
+      height: 844,
+      isMobile: true,
+    });
 
     await page.goto(url, {
-      waitUntil: "networkidle2",
+      waitUntil: "domcontentloaded",
       timeout: 60000,
     });
 
-    console.log("✅ Página carregada");
+    // espera render
+    await new Promise((r) => setTimeout(r, 8000));
 
-    await new Promise((r) => setTimeout(r, 10000));
-
-    // 🔥 salva screenshot no GitHub Actions
-    const screenshotPath = `debug-${Date.now()}.png`;
+    // screenshot debug
+    const screenshotPath = `debug-mobile-${Date.now()}.png`;
     await page.screenshot({ path: screenshotPath, fullPage: true });
-    console.log("📸 Screenshot salvo:", screenshotPath);
+    console.log("📸 Screenshot:", screenshotPath);
 
-    // 🔥 pega TODOS textos da página
-    const allTexts = await page.evaluate(() => {
-      return Array.from(document.querySelectorAll("span, div"))
+    // pega preço
+    const priceText = await page.evaluate(() => {
+      const selectors = [
+        '[class*="price-current"]',
+        '[class*="price--current"]',
+        '[class*="price-default--current"]',
+        '[class*="uniform-banner-box-price"]',
+      ];
+
+      for (const selector of selectors) {
+        const el = document.querySelector(selector);
+        if (el && el.innerText.includes("R$")) {
+          return el.innerText;
+        }
+      }
+
+      // fallback: busca qualquer R$
+      const all = Array.from(document.querySelectorAll("span, div"))
         .map((el) => el.innerText)
-        .filter((text) => text && text.includes("R$"));
+        .filter((t) => t && t.includes("R$"));
+
+      return all.length ? all[0] : null;
     });
 
-    console.log("💰 Textos com R$ encontrados:", allTexts);
+    console.log("💰 Texto capturado:", priceText);
 
-    if (!allTexts || allTexts.length === 0) {
-      console.log("❌ Nenhum preço encontrado no HTML");
+    if (!priceText) {
+      console.log("❌ Não encontrou preço");
       return null;
     }
 
-    // 🔥 tenta extrair preços válidos
-    const prices = allTexts
-      .map((text) => {
-        const num = parseFloat(
-          text.replace(/[^\d,]/g, "").replace(",", ".")
-        );
-        return num;
-      })
-      .filter((p) => !isNaN(p) && p > 1);
+    const price = parseFloat(
+      priceText.replace(/[^\d,]/g, "").replace(",", ".")
+    );
 
-    console.log("📊 Preços parseados:", prices);
-
-    if (prices.length === 0) {
-      console.log("❌ Nenhum preço válido após parse");
+    if (isNaN(price)) {
+      console.log("❌ Falha ao converter preço");
       return null;
     }
 
-    const finalPrice = Math.min(...prices);
-    console.log("✅ Preço final escolhido:", finalPrice);
+    console.log("✅ Preço final:", price);
 
-    return finalPrice;
+    return price;
 
   } catch (error) {
-    console.error("🔥 ERRO Puppeteer:", error.message);
+    console.error("🔥 Erro Puppeteer:", error.message);
     return null;
   }
 }
@@ -120,10 +138,6 @@ export default async function handler(req, res) {
   });
 
   const page = await browser.newPage();
-
-  await page.setUserAgent(
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
-  );
 
   await page.setExtraHTTPHeaders({
     "Accept-Language": "pt-BR,pt;q=0.9",
