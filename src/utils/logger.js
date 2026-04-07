@@ -5,23 +5,26 @@ const levels = {
   debug: 3,
 };
 
-export function createLogger(level = "info") {
-  const currentLevel = levels[level] ?? levels.info;
+const currentLevel = process.env.LOG_LEVEL || "info";
 
-  function canLog(targetLevel) {
-    return (levels[targetLevel] ?? levels.info) <= currentLevel;
-  }
-
-  function log(targetLevel, ...args) {
-    if (!canLog(targetLevel)) return;
-    const stamp = new Date().toISOString();
-    console[targetLevel === "debug" ? "log" : targetLevel](`[${stamp}] [${targetLevel.toUpperCase()}]`, ...args);
-  }
-
-  return {
-    error: (...args) => log("error", ...args),
-    warn: (...args) => log("warn", ...args),
-    info: (...args) => log("info", ...args),
-    debug: (...args) => log("debug", ...args),
-  };
+function canLog(level) {
+  return levels[level] <= levels[currentLevel];
 }
+
+function log(level, message, meta) {
+  if (!canLog(level)) return;
+
+  const timestamp = new Date().toISOString();
+  if (meta) {
+    console.log(`[${timestamp}] [${level.toUpperCase()}] ${message}`, meta);
+  } else {
+    console.log(`[${timestamp}] [${level.toUpperCase()}] ${message}`);
+  }
+}
+
+export const logger = {
+  error: (message, meta) => log("error", message, meta),
+  warn: (message, meta) => log("warn", message, meta),
+  info: (message, meta) => log("info", message, meta),
+  debug: (message, meta) => log("debug", message, meta),
+};
