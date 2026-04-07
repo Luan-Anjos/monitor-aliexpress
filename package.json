@@ -1,18 +1,14 @@
 {
   "name": "monitor-aliexpress",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "version": "2.0.0",
+  "description": "Monitor de preços do AliExpress com Google Sheets, Discord e fallback entre API afiliada e navegador headless",
   "type": "module",
   "scripts": {
-    "start": "node run.js"
+    "start": "node run.js",
+    "check": "node run.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
     "axios": "^1.14.0",
-    "cheerio": "^1.2.0",
     "dotenv": "^16.6.1",
     "googleapis": "^171.4.0",
     "puppeteer": "^24.40.0",

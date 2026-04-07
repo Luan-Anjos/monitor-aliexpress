@@ -1,4 +1,6 @@
 node_modules
 .env
-.github
+debug
+chrome-data
 *.png
+*.html
