@@ -1,4 +1,5 @@
 import dotenv from "dotenv";
+import fs from "fs";
 
 dotenv.config();
 
@@ -12,26 +13,27 @@ function parseNumber(value, defaultValue) {
   return Number.isFinite(parsed) ? parsed : defaultValue;
 }
 
-function parseJsonEnv(name, required = false) {
-  const value = process.env[name];
+function parseServiceAccount() {
+  const jsonFile = process.env.GOOGLE_SERVICE_ACCOUNT_FILE;
+  const jsonInline = process.env.GOOGLE_SERVICE_ACCOUNT;
 
-  if (!value) {
-    if (required) {
-      throw new Error(`Variável obrigatória ausente: ${name}`);
-    }
-    return null;
+  if (jsonFile) {
+    const raw = fs.readFileSync(jsonFile, "utf8");
+    return JSON.parse(raw);
   }
 
-  try {
-    return JSON.parse(value);
-  } catch (error) {
-    throw new Error(`Variável ${name} contém JSON inválido.`);
+  if (jsonInline) {
+    return JSON.parse(jsonInline);
   }
+
+  throw new Error(
+    "Informe GOOGLE_SERVICE_ACCOUNT_FILE ou GOOGLE_SERVICE_ACCOUNT no .env"
+  );
 }
 
 export const config = {
   spreadsheetId: process.env.SPREADSHEET_ID || "",
-  googleServiceAccount: parseJsonEnv("GOOGLE_SERVICE_ACCOUNT", true),
+  googleServiceAccount: parseServiceAccount(),
 
   discordWebhookUrl: process.env.DISCORD_WEBHOOK_URL || "",
 
@@ -61,11 +63,9 @@ export const config = {
   puppeteerExecutablePath: process.env.PUPPETEER_EXECUTABLE_PATH || "",
   puppeteerProxyUrl: process.env.PUPPETEER_PROXY_URL || "",
 
-  aeAppKey: process.env.AE_APP_KEY || "",
-  aeAppSecret: process.env.AE_APP_SECRET || "",
-  aeTrackingId: process.env.AE_TRACKING_ID || "",
-  aeGatewayUrl: process.env.AE_GATEWAY_URL || "https://eco.taobao.com/router/rest",
-  aeSignMethod: process.env.AE_SIGN_METHOD || "md5",
+  useRapidApi: parseBoolean(process.env.USE_RAPIDAPI, false),
+  rapidApiKey: process.env.RAPIDAPI_KEY || "",
+  rapidApiHost: process.env.RAPIDAPI_HOST || "aliexpress-true-api.p.rapidapi.com",
 };
 
 if (!config.spreadsheetId) {

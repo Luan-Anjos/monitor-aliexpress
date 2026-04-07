@@ -7,6 +7,10 @@ import { parseBrazilianPrice, uniqueValidPrices } from "../utils/prices.js";
 
 puppeteer.use(StealthPlugin());
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function buildLaunchArgs() {
   const args = [
     "--no-sandbox",
@@ -135,7 +139,7 @@ async function extractPricesFromPage(page) {
       if (item) {
         try {
           jsonCandidates.push(JSON.stringify(item));
-        } catch {}
+        } catch { }
       }
     }
 
@@ -236,7 +240,7 @@ export async function getPriceWithBrowser(browser, product) {
       timeout: config.requestTimeoutMs,
     });
 
-    await page.waitForTimeout(10000);
+    await sleep(10000);
 
     try {
       await page.waitForSelector('[class*="price"], [class*="Price"], meta[itemprop="price"]', {
@@ -246,7 +250,7 @@ export async function getPriceWithBrowser(browser, product) {
       logger.warn(`Timeout esperando preço renderizar para ${product.name}.`);
     }
 
-    await page.waitForTimeout(5000);
+    await sleep(5000);
 
     const payload = await extractPricesFromPage(page);
     await saveDebugFiles(product.name, payload);

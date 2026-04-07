@@ -5,7 +5,7 @@ import { randomDelay } from "../utils/time.js";
 import { readProductsFromSheet } from "../services/googleSheets.js";
 import { sendDiscordReport } from "../services/discord.js";
 import { createBrowser, getPriceWithBrowser } from "../services/aliexpressBrowser.js";
-import { getPriceWithAffiliateApi } from "../services/aliexpressAffiliateApi.js";
+import { getPriceWithRapidAPI } from "../services/aliexpressRapidApi.js";
 
 function buildReport(results) {
   const total = results.length;
@@ -26,7 +26,7 @@ function buildReport(results) {
     lines.push(`${emoji} **${item.name}**`);
     lines.push(`Preço planilha: ${formatPrice(item.sheetPrice)}`);
     lines.push(`Preço atual: ${item.currentPrice ? formatPrice(item.currentPrice) : "não encontrado"}`);
-    lines.push(`Fonte tentada: ${item.source || "desconhecida"}`);
+    lines.push(`Fonte usada: ${item.source || "desconhecida"}`);
 
     if (item.blocked) {
       lines.push("Observação: possível bloqueio/captcha detectado");
@@ -44,12 +44,12 @@ export async function runMonitor() {
 
   const products = await readProductsFromSheet();
 
-  logger.info(`Produtos válidos para monitorar: ${products.length}`);
-
   const limitedProducts =
     config.maxProductsPerRun > 0
       ? products.slice(0, config.maxProductsPerRun)
       : products;
+
+  logger.info(`Produtos válidos para monitorar: ${limitedProducts.length}`);
 
   let browser = null;
   const results = [];
@@ -57,20 +57,16 @@ export async function runMonitor() {
   try {
     browser = await createBrowser();
 
-    if (!config.aeAppKey || !config.aeAppSecret) {
-      logger.info("API afiliada não configurada.");
+    if (!config.useRapidApi || !config.rapidApiKey) {
+      logger.info("RapidAPI não configurada.");
     }
 
     for (let index = 0; index < limitedProducts.length; index += 1) {
       const product = limitedProducts[index];
       logger.info(`[${index + 1}/${limitedProducts.length}] Verificando ${product.name}`);
 
-      let apiResult = null;
+      let apiResult = await getPriceWithRapidAPI(product);
       let browserResult = null;
-
-      if (config.aeAppKey && config.aeAppSecret) {
-        apiResult = await getPriceWithAffiliateApi(product);
-      }
 
       if (!apiResult?.found) {
         browserResult = await getPriceWithBrowser(browser, product);
@@ -109,7 +105,6 @@ export async function runMonitor() {
     : results;
 
   const report = buildReport(visibleResults);
-
   const discordResult = await sendDiscordReport(config.discordWebhookUrl, report);
 
   if (!discordResult?.ok && !discordResult?.skipped) {
