@@ -11,30 +11,35 @@ import StealthPlugin from "puppeteer-extra-plugin-stealth";
 puppeteer.use(StealthPlugin());
 
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
-const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
+const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL || "";
 const GOOGLE_SERVICE_ACCOUNT = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
 
+// Se quiser rodar visível no PC, coloque HEADLESS=false no .env
+const HEADLESS = process.env.HEADLESS !== "false";
+
+// Pasta de debug
 const DEBUG_DIR = path.resolve("./debug");
 
+// ================= HELPERS =================
 async function ensureDebugDir() {
   await fs.mkdir(DEBUG_DIR, { recursive: true });
 }
 
 function sanitizeFileName(name) {
-  return name
+  return String(name || "produto")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^\w.-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
     .slice(0, 80);
 }
 
 function parseBrazilianPrice(text) {
   if (!text) return null;
 
-  const normalized = String(text)
-    .replace(/\s+/g, " ")
-    .trim();
+  const normalized = String(text).replace(/\s+/g, " ").trim();
 
+  // Ex.: R$ 415,32
   const match = normalized.match(/R\$\s*([\d.]+,\d{2})/);
   if (!match) return null;
 
@@ -42,19 +47,40 @@ function parseBrazilianPrice(text) {
   return Number.isNaN(value) ? null : value;
 }
 
-function uniquePricesFromTexts(texts) {
-  const seen = new Set();
+function uniqueValidPrices(texts) {
+  const unique = new Set();
   const prices = [];
 
   for (const text of texts) {
     const price = parseBrazilianPrice(text);
-    if (price !== null && price > 1 && !seen.has(price)) {
-      seen.add(price);
+    if (price !== null && price > 1 && !unique.has(price)) {
+      unique.add(price);
       prices.push(price);
     }
   }
 
   return prices.sort((a, b) => a - b);
+}
+
+async function saveDebugArtifacts(page, productName, suffix = "debug") {
+  await ensureDebugDir();
+
+  const safeName = sanitizeFileName(productName);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const base = `${stamp}-${safeName}-${suffix}`;
+
+  const screenshotPath = path.join(DEBUG_DIR, `${base}.png`);
+  const htmlPath = path.join(DEBUG_DIR, `${base}.html`);
+
+  await page.screenshot({
+    path: screenshotPath,
+    fullPage: true,
+  });
+
+  const html = await page.content();
+  await fs.writeFile(htmlPath, html, "utf8");
+
+  return { screenshotPath, htmlPath };
 }
 
 // ================= GOOGLE SHEETS =================
@@ -74,31 +100,11 @@ async function getSheetData() {
   return res.data.values || [];
 }
 
-// ================= DEBUG HELPERS =================
-async function saveDebugArtifacts(page, productName, suffix = "") {
-  await ensureDebugDir();
-
-  const safeName = sanitizeFileName(productName || "produto");
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const baseName = `${stamp}-${safeName}${suffix ? `-${suffix}` : ""}`;
-
-  const screenshotPath = path.join(DEBUG_DIR, `${baseName}.png`);
-  const htmlPath = path.join(DEBUG_DIR, `${baseName}.html`);
-
-  await page.screenshot({
-    path: screenshotPath,
-    fullPage: true,
-  });
-
-  const html = await page.content();
-  await fs.writeFile(htmlPath, html, "utf8");
-
-  return { screenshotPath, htmlPath };
-}
-
+// ================= SCRAPING =================
 async function collectCandidateTexts(page) {
   return await page.evaluate(() => {
     const texts = [];
+    const seen = new Set();
 
     const selectors = [
       'meta[property="og:title"]',
@@ -111,16 +117,13 @@ async function collectCandidateTexts(page) {
       "div",
     ];
 
-    const pushed = new Set();
-
     for (const selector of selectors) {
       const elements = document.querySelectorAll(selector);
 
       for (const el of elements) {
-        const text =
-          selector.startsWith("meta")
-            ? el.getAttribute("content")
-            : el.innerText;
+        const text = selector.startsWith("meta")
+          ? el.getAttribute("content")
+          : el.innerText;
 
         if (!text) continue;
 
@@ -128,24 +131,57 @@ async function collectCandidateTexts(page) {
 
         if (
           normalized.includes("R$") &&
-          normalized.length <= 80 &&
-          !pushed.has(normalized)
+          normalized.length <= 100 &&
+          !seen.has(normalized)
         ) {
-          pushed.add(normalized);
+          seen.add(normalized);
           texts.push(normalized);
         }
       }
     }
 
-    return texts.slice(0, 100);
+    return texts.slice(0, 120);
   });
 }
 
-// ================= PREÇO =================
+async function collectJsonCandidates(page) {
+  return await page.evaluate(() => {
+    const candidates = [];
+
+    const pushCandidate = (value, source) => {
+      if (!value) return;
+      candidates.push({ source, value: String(value) });
+    };
+
+    try {
+      const rp = window.runParams;
+      const init = window.__INIT_DATA__;
+
+      const modules = [
+        rp?.data?.priceModule,
+        rp?.data?.root?.fields?.priceModule,
+        init?.data?.priceModule,
+        init?.data?.root?.fields?.priceModule,
+      ];
+
+      for (const mod of modules) {
+        if (!mod) continue;
+
+        pushCandidate(mod.formatedActivityPrice, "json.formatedActivityPrice");
+        pushCandidate(mod.formatedPrice, "json.formatedPrice");
+        pushCandidate(mod.minActivityAmount?.value, "json.minActivityAmount.value");
+        pushCandidate(mod.minAmount?.value, "json.minAmount.value");
+      }
+    } catch (_) {}
+
+    return candidates;
+  });
+}
+
 async function fetchPriceAliExpress(page, url, productName) {
   try {
-    console.log("=".repeat(80));
-    console.log("🔎 Produto:", productName);
+    console.log("=".repeat(90));
+    console.log("🔎 Verificando:", productName);
     console.log("🌐 URL:", url);
 
     await page.setCacheEnabled(false);
@@ -155,15 +191,22 @@ async function fetchPriceAliExpress(page, url, productName) {
       timeout: 60000,
     });
 
-    await page.waitForTimeout(8000);
+    // Espera render inicial
+    await new Promise((resolve) => setTimeout(resolve, 8000));
 
     const title = await page.title();
     const finalUrl = page.url();
+    const html = await page.content();
 
     console.log("📄 Título:", title);
     console.log("🔗 URL final:", finalUrl);
+    console.log("📦 HTML size:", html.length);
 
-    if (/captcha|punish|interception/i.test(title) || /\/punish\?/i.test(finalUrl)) {
+    // Detecta bloqueio explícito
+    if (
+      /captcha|interception|verify|blocked/i.test(title) ||
+      /\/punish\?/i.test(finalUrl)
+    ) {
       console.log("🚫 Bloqueio detectado (captcha/punish).");
       const artifacts = await saveDebugArtifacts(page, productName, "blocked");
       console.log("📸 Screenshot:", artifacts.screenshotPath);
@@ -171,88 +214,56 @@ async function fetchPriceAliExpress(page, url, productName) {
       return null;
     }
 
-    // 1) tenta pegar do JSON interno
-    const jsonResult = await page.evaluate(() => {
-      const candidates = [];
+    // 1) JSON interno
+    const jsonCandidates = await collectJsonCandidates(page);
+    console.log("🧠 Candidatos via JSON:", jsonCandidates);
 
-      const tryPush = (value, source) => {
-        if (!value) return;
-        candidates.push({ source, value: String(value) });
-      };
+    const jsonPrices = uniqueValidPrices(jsonCandidates.map((x) => x.value));
+    console.log("🧠 Preços parseados do JSON:", jsonPrices);
 
-      try {
-        const rp = window.runParams;
-        const init = window.__INIT_DATA__;
+    // 2) HTML visível
+    const htmlTexts = await collectCandidateTexts(page);
+    console.log("💰 Textos com R$ encontrados:", htmlTexts);
 
-        const modules = [
-          rp?.data?.priceModule,
-          rp?.data?.root?.fields?.priceModule,
-          init?.data?.priceModule,
-          init?.data?.root?.fields?.priceModule,
-        ];
+    const htmlPrices = uniqueValidPrices(htmlTexts);
+    console.log("📊 Preços parseados do HTML:", htmlPrices);
 
-        for (const mod of modules) {
-          if (!mod) continue;
-          tryPush(mod.formatedActivityPrice, "json.formatedActivityPrice");
-          tryPush(mod.formatedPrice, "json.formatedPrice");
-          tryPush(mod.minActivityAmount?.value, "json.minActivityAmount.value");
-          tryPush(mod.minAmount?.value, "json.minAmount.value");
-        }
-      } catch (_) {}
-
-      return candidates;
-    });
-
-    console.log("🧠 Candidatos via JSON:", jsonResult);
-
-    const jsonPrices = uniquePricesFromTexts(jsonResult.map((x) => x.value));
-    if (jsonPrices.length > 0) {
-      console.log("✅ Preços via JSON:", jsonPrices);
-    }
-
-    // 2) tenta pelos elementos visíveis
-    const candidateTexts = await collectCandidateTexts(page);
-    console.log("💰 Textos com R$ encontrados:", candidateTexts);
-
-    const visiblePrices = uniquePricesFromTexts(candidateTexts);
-    console.log("📊 Preços parseados do HTML:", visiblePrices);
-
-    // 3) heurística de escolha
-    const allCandidates = [...new Set([...jsonPrices, ...visiblePrices])].sort((a, b) => a - b);
-
-    if (allCandidates.length === 0) {
-      console.log("❌ Nenhum preço encontrado.");
-      const artifacts = await saveDebugArtifacts(page, productName, "noprice");
-      console.log("📸 Screenshot:", artifacts.screenshotPath);
-      console.log("📄 HTML:", artifacts.htmlPath);
-      return null;
-    }
-
-    // prioridade:
-    // - se JSON existir, pega o maior preço do JSON (evita pegar "a partir de" muito baixo)
-    // - senão pega o maior preço visível razoável
+    // 3) Regras de escolha
     let chosenPrice = null;
 
     if (jsonPrices.length > 0) {
+      // Prefere o MAIOR do JSON para evitar preço "a partir de"
       chosenPrice = Math.max(...jsonPrices);
       console.log("🎯 Preço escolhido pelo JSON:", chosenPrice);
-    } else {
-      chosenPrice = Math.max(...visiblePrices);
+    } else if (htmlPrices.length > 0) {
+      // Prefere o MAIOR do HTML pelo mesmo motivo
+      chosenPrice = Math.max(...htmlPrices);
       console.log("🎯 Preço escolhido pelo HTML:", chosenPrice);
     }
 
-    const artifacts = await saveDebugArtifacts(page, productName, "ok");
+    const artifacts = await saveDebugArtifacts(
+      page,
+      productName,
+      chosenPrice !== null ? "ok" : "noprice"
+    );
     console.log("📸 Screenshot:", artifacts.screenshotPath);
     console.log("📄 HTML:", artifacts.htmlPath);
+
+    if (chosenPrice === null) {
+      console.log("❌ Nenhum preço encontrado.");
+      return null;
+    }
 
     return chosenPrice;
   } catch (error) {
     console.error(`🔥 Erro ao buscar preço (${productName}):`, error.message);
+
     try {
       const artifacts = await saveDebugArtifacts(page, productName, "error");
       console.log("📸 Screenshot:", artifacts.screenshotPath);
       console.log("📄 HTML:", artifacts.htmlPath);
     } catch {}
+
     return null;
   }
 }
@@ -268,7 +279,10 @@ async function sendDiscordMessage(message) {
     await axios.post(DISCORD_WEBHOOK_URL, { content: message });
     console.log("📨 Mensagem enviada ao Discord.");
   } catch (error) {
-    console.error("Erro ao enviar mensagem:", error.response?.status || error.message);
+    console.error(
+      "Erro ao enviar mensagem:",
+      error.response?.status || error.message
+    );
   }
 }
 
@@ -290,12 +304,15 @@ export default async function handler(req, res) {
   let changesCount = 0;
 
   const browser = await puppeteer.launch({
-    headless: false, // no PC normal vale usar false
+    headless: HEADLESS,
     defaultViewport: null,
     args: [
-      "--start-maximized",
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
       "--disable-blink-features=AutomationControlled",
       "--lang=pt-BR",
+      ...(HEADLESS ? [] : ["--start-maximized"]),
     ],
   });
 
@@ -376,9 +393,9 @@ Link: ${productLink}`
   await browser.close();
 
   const header = `🕵️‍♂️ Verificação - ${changesCount} alteração(ões)`;
-  const message = `${header}\n\n${reportMessages.join("\n\n")}`;
+  const finalMessage = `${header}\n\n${reportMessages.join("\n\n")}`;
 
-  await sendDiscordMessage(message);
+  await sendDiscordMessage(finalMessage);
 
   return res.status(200).json({
     message: `Finalizado com ${changesCount} alterações`,
