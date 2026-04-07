@@ -5,15 +5,14 @@ import { randomDelay } from "../utils/time.js";
 import { readProductsFromSheet } from "../services/googleSheets.js";
 import { sendDiscordReport } from "../services/discord.js";
 import { createBrowser, getPriceWithBrowser } from "../services/aliexpressBrowser.js";
-import { getPriceWithRapidAPI } from "../services/aliexpressRapidApi.js";
+import { getPriceWithOmkarApi } from "../services/aliexpressOmkarApi.js";
 
 function calculateVariationPercent(oldPrice, newPrice) {
   if (!Number.isFinite(oldPrice) || !Number.isFinite(newPrice) || oldPrice <= 0) {
     return null;
   }
 
-  const percent = ((newPrice - oldPrice) / oldPrice) * 100;
-  return percent;
+  return ((newPrice - oldPrice) / oldPrice) * 100;
 }
 
 function getPriceStatus(sheetPrice, currentPrice) {
@@ -93,7 +92,7 @@ function buildProductBlock(item) {
       "└───────────────",
       "",
       "📈 Variação: não disponível",
-      `📌 Situação: SEM PREÇO`,
+      "📌 Situação: SEM PREÇO",
       `🧭 Fonte: ${item.source || "desconhecida"}`,
       `🔗 ${item.url}`,
       "",
@@ -118,11 +117,9 @@ function buildProductBlock(item) {
 
 function buildReport(results) {
   const lines = [...buildSummary(results)];
-
   for (const item of results) {
     lines.push(...buildProductBlock(item));
   }
-
   return lines.join("\n");
 }
 
@@ -152,7 +149,7 @@ export async function runMonitor() {
       const product = limitedProducts[index];
       logger.info(`[${index + 1}/${limitedProducts.length}] Verificando ${product.name}`);
 
-      const apiResult = await getPriceWithRapidAPI(product);
+      const apiResult = await getPriceWithOmkarApi(product);
       let browserResult = null;
 
       if (!apiResult?.found && config.useBrowserFallback && browser) {
@@ -161,7 +158,6 @@ export async function runMonitor() {
 
       const finalResult = apiResult?.found ? apiResult : browserResult;
       const currentPrice = finalResult?.price || null;
-
       const status = getPriceStatus(product.sheetPrice, currentPrice);
 
       results.push({

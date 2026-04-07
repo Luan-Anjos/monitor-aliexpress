@@ -63,9 +63,10 @@ export const config = {
   puppeteerExecutablePath: process.env.PUPPETEER_EXECUTABLE_PATH || "",
   puppeteerProxyUrl: process.env.PUPPETEER_PROXY_URL || "",
 
-  useRapidApi: parseBoolean(process.env.USE_RAPIDAPI, false),
-  rapidApiKey: process.env.RAPIDAPI_KEY || "",
-  rapidApiHost: process.env.RAPIDAPI_HOST || "aliexpress-true-api.p.rapidapi.com",
+  useOmkarApi: parseBoolean(process.env.USE_OMKAR_API, false),
+  omkarApiKey: process.env.OMKAR_API_KEY || "",
+
+  useBrowserFallback: parseBoolean(process.env.USE_BROWSER_FALLBACK, false),
 };
 
 if (!config.spreadsheetId) {
