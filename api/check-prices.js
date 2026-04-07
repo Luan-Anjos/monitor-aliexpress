@@ -31,64 +31,78 @@ async function getSheetData() {
   return res.data.values;
 }
 
-// ================= PEGAR PREÇO =================
+// ================= CAPTURA DE PREÇO =================
 async function fetchPriceAliExpress(page, url) {
   try {
-    await page.setViewport({ width: 1366, height: 768 });
+    let capturedPrice = null;
 
-    await page.goto(url, {
-      waitUntil: "domcontentloaded",
-      timeout: 60000,
-    });
+    // 🔥 limpa listeners antigos
+    page.removeAllListeners("response");
 
-    // espera JS carregar
-    await new Promise((r) => setTimeout(r, 7000));
-
-    const price = await page.evaluate(() => {
-      // 🔥 MÉTODO PRINCIPAL (JS interno do AliExpress)
+    // 🔥 intercepta API interna
+    page.on("response", async (response) => {
       try {
-        const data = window.runParams || window.__INIT_DATA__;
+        const reqUrl = response.url();
 
-        if (data) {
-          const priceModule =
-            data?.data?.priceModule ||
-            data?.data?.root?.fields?.priceModule;
+        if (reqUrl.includes("mtop.aliexpress.com")) {
+          const text = await response.text();
 
-          if (priceModule) {
-            return (
-              priceModule.formatedActivityPrice ||
-              priceModule.formatedPrice ||
-              priceModule.minActivityAmount?.value ||
-              priceModule.minAmount?.value
-            );
+          if (text.includes("priceModule")) {
+            const json = JSON.parse(text);
+
+            const priceModule = json?.data?.priceModule;
+
+            const price =
+              priceModule?.formatedActivityPrice ||
+              priceModule?.formatedPrice ||
+              priceModule?.minActivityAmount?.value ||
+              priceModule?.minAmount?.value;
+
+            if (price && !capturedPrice) {
+              capturedPrice = price;
+            }
           }
         }
       } catch (e) {}
-
-      // 🔥 FALLBACK HTML
-      const selectors = [
-        '[class*="price--currentPriceText"]',
-        '[class*="price-default--current"]',
-        '[class*="uniform-banner-box-price"]',
-      ];
-
-      for (const sel of selectors) {
-        const el = document.querySelector(sel);
-        if (el && el.innerText.includes("R$")) {
-          return el.innerText;
-        }
-      }
-
-      return null;
     });
 
-    if (!price) {
+    await page.goto(url, {
+      waitUntil: "networkidle2",
+      timeout: 60000,
+    });
+
+    // aguarda requisições da API
+    await new Promise((r) => setTimeout(r, 8000));
+
+    // 🔥 fallback se API falhar
+    if (!capturedPrice) {
+      console.warn("⚠️ API falhou, tentando HTML...");
+
+      capturedPrice = await page.evaluate(() => {
+        const selectors = [
+          '[class*="price--currentPriceText"]',
+          '[class*="price-default--current"]',
+          '[class*="uniform-banner-box-price"]',
+        ];
+
+        for (const sel of selectors) {
+          const el = document.querySelector(sel);
+          if (el && el.innerText.includes("R$")) {
+            return el.innerText;
+          }
+        }
+
+        return null;
+      });
+    }
+
+    if (!capturedPrice) {
       console.warn(`❌ Preço não encontrado: ${url}`);
       return null;
     }
 
     const parsed = parseFloat(
-      price
+      capturedPrice
         .toString()
         .replace(/\s/g, "")
         .replace(/[^\d,\.]/g, "")
@@ -127,13 +141,15 @@ export default async function handler(req, res) {
   let reportMessages = [];
   let changesCount = 0;
 
-  // 🔥 Browser stealth
+  // 🔥 inicia browser
   const browser = await puppeteer.launch({
     headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
   });
 
   const page = await browser.newPage();
+
+  await page.setViewport({ width: 1366, height: 768 });
 
   await page.setUserAgent(
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
